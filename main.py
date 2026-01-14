@@ -27,7 +27,7 @@ class PhysicalChessBoard:
 
     def calibrate_board(self):
         print("=== 1단계: 웹캠 체스판 캘리브레이션 ===")
-        print("순서 중요: [1.좌상] -> [2.우상] -> [3.우하] -> [4.좌하]")
+        print("순서 중요: [1.좌상] -> [2.우상] -> [3.우하] -> [4.좌하]\n본인이 하는 색이 아래에 오도록 찍으세요.")
 
         time.sleep(1.0) 
 
@@ -91,12 +91,12 @@ class PhysicalChessBoard:
 
     def calibrate_screen(self):
         print("\n=== 2단계: 모니터(웹 브라우저) 좌표 설정 ===")
-        print("마우스를 모니터의 chess.com 보드 '좌상단(a8)'에 두고 Enter를 치세요.")
+        print("마우스를 모니터의 chess.com 보드 '좌상단(a8) 모서리'에 두고 Enter를 치세요.")
         input("준비되면 Enter...")
         x1, y1 = pag.position()
         print(f"좌상단 저장됨: {x1}, {y1}")
 
-        print("마우스를 모니터의 chess.com 보드 '우하단(h1)'에 두고 Enter를 치세요.")
+        print("마우스를 모니터의 chess.com 보드 '우하단(h1) 모서리'에 두고 Enter를 치세요.")
         input("준비되면 Enter...")
         x2, y2 = pag.position()
         print(f"우하단 저장됨: {x2}, {y2}")
@@ -110,10 +110,15 @@ class PhysicalChessBoard:
 
     def get_square_from_rect(self, x, y):
         # 400x400 이미지를 8x8로 나누어 체스 좌표(a1~h8) 반환
+        # 내가 흑인 경우 보드 좌표계 반전
         col = x // (self.board_size // 8)
         row = 7 - (y // (self.board_size // 8)) # 0이 8랭크(위쪽)이므로 반전 필요
         
         files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+
+        if self.my_color == chess.BLACK:
+            col = 7 - col
+            row = 7 - row
         return files[col] + str(row + 1)
 
     def detect_move(self, current_frame):
@@ -124,7 +129,7 @@ class PhysicalChessBoard:
 
         if self.prev_gray is None:
             self.prev_gray = curr_gray
-            return None
+            return None, None
 
         # 2. 차이 계산
         diff = cv2.absdiff(self.prev_gray, curr_gray)
@@ -157,13 +162,13 @@ class PhysicalChessBoard:
         square_changes.sort(key=lambda x: x[0], reverse=True)
 
         # [방어 3] 조명 변화 감지 (Global Lighting Change)
-        # 갑자기 3칸 이상이 동시에 변했다? 이건 기물 이동이 아니라 그림자/조명 문제임.
-        # 이럴 땐 오작동을 막기 위해 아무것도 안 하고 리턴함.
-        if len(square_changes) > 2:
+        # 갑자기 4칸 이상이 동시에 변했다? 이건 기물 이동이 아니라 그림자/조명 문제임.
+        # 3칸 변화는 앙파상일 수 있음!! << 나중에 적용
+        if len(square_changes) > 3:
             print(f"⚠️ 조명/그림자 흔들림 감지됨 (변화된 칸 {len(square_changes)}개). 무시합니다.")
-            return None
+            return None, None
 
-        # 4. 논리적 추론 (AI 대체)
+        # 4. 논리적 추론 (AI 대체 가능)
         # 상위 2개(가장 많이 변한 칸)만 가지고 판단
         if len(square_changes) >= 2:
             sq1 = square_changes[0][1]
@@ -171,7 +176,7 @@ class PhysicalChessBoard:
             
             # log 확인용
             # print(f"감지 후보: {sq1}, {sq2} (변화량: {square_changes[0][0]}, {square_changes[1][0]})")
-
+            # 흑일때 좌표를 이미 구체화했으므로 그대로 사용
             move1 = chess.Move.from_uci(sq1 + sq2)
             move2 = chess.Move.from_uci(sq2 + sq1)
 
@@ -186,41 +191,40 @@ class PhysicalChessBoard:
                 print(f"✅ 이동 확정: {final_move}")
                 self.board.push(final_move) # 내부 체스판 업데이트
                 self.prev_gray = curr_gray # [중요] 이동이 성공했을 때만 기준 화면 업데이트!
-                return final_move.uci()
+                moved_color =  not self.board.turn
+                return final_move.uci(), moved_color
         
-        return None
+        return None, None
 
     def execute_on_screen(self, move_string):
         if not self.screen_corners: return
 
         # move_string 예: "e2e4"
         start_sq, end_sq = move_string[:2], move_string[2:4]
+        files = {'a':0, 'b':1, 'c':2, 'd':3, 'e':4, 'f':5, 'g':6, 'h':7}
         
-        def get_screen_pos(sq):
-            # 체스 좌표(e2)를 화면 픽셀 좌표로 변환
-            files = {'a':0, 'b':1, 'c':2, 'd':3, 'e':4, 'f':5, 'g':6, 'h':7}
-            col = files[sq[0]]
-            row = int(sq[1]) - 1 # 1-based to 0-based
+        def get_pos(sq):
+            f = files[sq[0]]
+            r = int(sq[1])
             
-            x_start, y_start = self.screen_corners[0]
-            x_end, y_end = self.screen_corners[1]
+            x1, y1 = self.screen_corners[0]
+            x2, y2 = self.screen_corners[1]
+            w, h = x2 - x1, y2 - y1
             
-            width = x_end - x_start
-            height = y_end - y_start
-            
-            cell_w = width / 8
-            cell_h = height / 8
-            
-            # chess.com은 a1이 하단이므로 y좌표 계산 주의
-            # 화면 좌표계: 위(0) -> 아래(+) / 체스 보드: 위(8) -> 아래(1)
-            target_x = x_start + (col * cell_w) + (cell_w / 2)
-            target_y = y_end - (row * cell_h) - (cell_h / 2)
-            
+            # 백: a1이 좌하단 / 흑: h8이 좌하단 (화면이 뒤집힘)
+            if self.my_color == chess.WHITE:
+                target_x = x1 + (f * w/8) + w/16
+                target_y = y1 + ((8-r) * h/8) + h/16
+            else:
+                # 흑일 때 화면 좌표 계산 (좌우, 상하 반전)
+                target_x = x1 + ((7-f) * w/8) + w/16
+                target_y = y1 + ((r-1) * h/8) + h/16
+                
             return target_x, target_y
 
         # 마우스 조작
-        sx, sy = get_screen_pos(start_sq)
-        ex, ey = get_screen_pos(end_sq)
+        sx, sy = get_pos(start_sq)
+        ex, ey = get_pos(end_sq)
 
         pag.click(sx, sy) # 출발지 클릭
         time.sleep(0.1)
@@ -233,11 +237,22 @@ class PhysicalChessBoard:
 if __name__ == "__main__":
     game = PhysicalChessBoard()
     
-    # 1. 설정 단계
+    # 플레이어 색상 선택
+    while True:
+        user_input = input("당신은 백(w)입니까 흑(b)입니까? (w/b): ").lower()
+        if user_input == 'w':
+            game.my_color = chess.WHITE
+            print("⚪️ 당신은 [백(White)]입니다. 카메라 아래쪽이 1랭크입니다.")
+            break
+        elif user_input == 'b':
+            game.my_color = chess.BLACK
+            print("⚫️ 당신은 [흑(Black)]입니다. 카메라 아래쪽이 8랭크입니다.")
+            break
+
     game.calibrate_board()  # 웹캠 설정
     game.calibrate_screen() # 화면 마우스 설정
 
-    print("\n=== 게임 시작 (손을 떼면 수가 입력됩니다) ===")
+    print("\n=== 게임 시작 ===")
     
     stable_counter = 0
     last_move_time = time.time()
@@ -252,7 +267,7 @@ if __name__ == "__main__":
         cv2.imshow("Warped View", warped)
 
         # 안정화 감지 (손이 움직이는 동안은 판독 X)
-        # 현재 프레임과 이전 기준 프레임의 차이가 적을 때(손이 빠졌을 때) 로직 실행
+        # 현재 프레임과 이전 기준 프레임의 차이가 적을 때(수를 둔 후 손이 빠졌을 때) 로직 실행
         if game.prev_gray is None:
             curr_gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
             game.prev_gray = cv2.GaussianBlur(curr_gray, (5, 5), 0)
@@ -260,11 +275,12 @@ if __name__ == "__main__":
             
         # 1초마다 한 번씩만 판독 시도 (과도한 연산 방지)
         if time.time() - last_move_time > 1.0:
-            move = game.detect_move(frame)
-            if move:
-                print(f"실행할 이동: {move}")
-                game.execute_on_screen(move)
+            move_str, moved_color = game.detect_move(frame)
+            if move_str:
                 last_move_time = time.time() # 타이머 리셋
+
+                if moved_color == game.my_color:    # 내 차례일 때만 마우스 조작
+                    game.execute_on_screen(move_str)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
