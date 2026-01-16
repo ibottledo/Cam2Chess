@@ -14,6 +14,10 @@ class PhysicalChessBoard:
         self.board = chess.Board()      # 내부 논리용 체스판 (규칙 검증용)
         self.board_size = 400           # 변환 후 이미지 크기 (400x400 픽셀)
         self.my_color = chess.WHITE     # 플레이어 색상 기본값
+
+        # 안정화 체크
+        self.candidate_move = None
+        self.stable_count = 0
         
         # 안전장치: 마우스가 화면 구석으로 가면 프로그램 강제 종료
         pag.FAILSAFE = True 
@@ -121,6 +125,7 @@ class PhysicalChessBoard:
             row = 7 - row
         return files[col] + str(row + 1)
 
+    """
     def detect_move(self, current_frame):
         # 1. 이미지 전처리
         curr_warped = self.get_warped_frame(current_frame)
@@ -152,8 +157,8 @@ class PhysicalChessBoard:
                 change_count = cv2.countNonZero(roi)
                 
                 # [방어 2] 면적 필터링
-                # 한 칸 면적의 15% 이상이 변해야 인정 (작은 노이즈/구석 그림자 무시)
-                if change_count > (total_pixels_per_square * 0.15): 
+                # 한 칸 면적의 25% 이상이 변해야 인정 (작은 노이즈/구석 그림자 무시)
+                if change_count > (total_pixels_per_square * 0.25): 
                     # 좌표 변환
                     sq_name = self.get_square_from_rect(x1 + step//2, y1 + step//2)
                     square_changes.append((change_count, sq_name))
@@ -166,7 +171,7 @@ class PhysicalChessBoard:
         # 3칸 변화는 앙파상일 수 있음!! << 나중에 적용
         if len(square_changes) > 3:
             print(f"⚠️ 조명/그림자 흔들림 감지됨 (변화된 칸 {len(square_changes)}개). 무시합니다.")
-            return None, None
+            return None, curr_gray
 
         # 4. 논리적 추론 (AI 대체 가능)
         # 상위 2개(가장 많이 변한 칸)만 가지고 판단
@@ -195,6 +200,51 @@ class PhysicalChessBoard:
                 return final_move.uci(), moved_color
         
         return None, None
+    """
+    
+    def scan_current_view(self, current_frame):
+        # 1. 전처리
+        curr_warped = self.get_warped_frame(current_frame)
+        curr_gray = cv2.cvtColor(curr_warped, cv2.COLOR_BGR2GRAY)
+        curr_gray = cv2.GaussianBlur(curr_gray, (5, 5), 0)
+
+        if self.prev_gray is None:
+            self.prev_gray = curr_gray
+            return None, curr_gray # 초기화용
+
+        # 2. 차이 계산 (민감도 완화: 30 -> 50)
+        diff = cv2.absdiff(self.prev_gray, curr_gray)
+        _, thresh = cv2.threshold(diff, 50, 255, cv2.THRESH_BINARY)
+
+        # 3. 변화된 칸 찾기
+        square_changes = []
+        step = self.board_size // 8
+        total_pixels = step * step
+        
+        for row in range(8):
+            for col in range(8):
+                x1, y1 = col * step, row * step
+                x2, y2 = (col + 1) * step, (row + 1) * step
+                
+                roi = thresh[y1:y2, x1:x2]
+                # [수정] 한 칸의 15% 이상 변해야 인정 (노이즈 방어 강화)
+                if cv2.countNonZero(roi) > (total_pixels * 0.15):
+                    sq_name = self.get_square_from_rect(x1 + step//2, y1 + step//2)
+                    square_changes.append((cv2.countNonZero(roi), sq_name))
+
+        square_changes.sort(key=lambda x: x[0], reverse=True)
+
+        # 그림자 등으로 너무 많이 변하면 무시
+        if len(square_changes) > 4: 
+            return None, curr_gray
+
+        # 변화가 유의미한 2칸이 감지되면 문자열(예: "e2e4") 리턴
+        if len(square_changes) >= 2:
+            sq1 = square_changes[0][1]
+            sq2 = square_changes[1][1]
+            return sq1 + sq2, curr_gray
+        
+        return None, curr_gray
 
     def execute_on_screen(self, move_string):
         if not self.screen_corners: return
@@ -233,6 +283,7 @@ class PhysicalChessBoard:
         # 마우스 원위치 (방해 안되게)
         pag.moveTo(10, 10)
 
+"""
 # === 메인 실행부 ===
 if __name__ == "__main__":
     game = PhysicalChessBoard()
@@ -281,6 +332,106 @@ if __name__ == "__main__":
 
                 if moved_color == game.my_color:    # 내 차례일 때만 마우스 조작
                     game.execute_on_screen(move_str)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    game.cap.release()
+    cv2.destroyAllWindows()
+"""
+
+if __name__ == "__main__":
+    game = PhysicalChessBoard()
+    
+    # 1. 색상 선택
+    while True:
+        user_input = input("당신은 백(w)입니까 흑(b)입니까? (w/b): ").lower()
+        if user_input == 'w':
+            game.my_color = chess.WHITE
+            print("⚪️ 설정: 백(White).")
+            break
+        elif user_input == 'b':
+            game.my_color = chess.BLACK
+            print("⚫️ 설정: 흑(Black).")
+            break
+
+    game.calibrate_board()
+    game.calibrate_screen()
+
+    print("\n=== 게임 시작 ===")
+    print("💡 팁: 기물을 옮기고 손을 확실히 치우세요.")
+    
+    while True:
+        ret, frame = game.cap.read()
+        if not ret: break
+
+        warped = game.get_warped_frame(frame)
+        cv2.imshow("Original", frame)
+        
+        # [디버깅용] 컴퓨터가 보는 흑백 화면 띄우기 (그림자 확인용)
+        if game.prev_gray is not None:
+             # 현재 화면과 기준 화면의 차이를 눈으로 보여줌 (흰색으로 번쩍이면 감지된 것)
+             curr_gray_temp = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
+             curr_gray_temp = cv2.GaussianBlur(curr_gray_temp, (5, 5), 0)
+             diff_debug = cv2.absdiff(game.prev_gray, curr_gray_temp)
+             _, thresh_debug = cv2.threshold(diff_debug, 25, 255, cv2.THRESH_BINARY)    # 임계값 25
+             cv2.imshow("Debug View (Threshold)", thresh_debug)
+        else:
+             cv2.imshow("Debug View (Threshold)", warped)
+
+        # 1. 현재 화면 스캔
+        detected_str, current_gray_img = game.scan_current_view(frame)
+
+        # 2. 안정화 로직 (Debouncing)
+        if detected_str:
+            if detected_str == game.candidate_move:
+                game.stable_count += 1
+            else:
+                game.candidate_move = detected_str
+                game.stable_count = 1
+                print(f"👀 감지 중... {detected_str}") # 흔들릴 때마다 출력됨
+        else:
+            game.stable_count = 0 # 변화가 사라지면 리셋
+            
+        # 3. 5프레임 연속으로 똑같은 수가 감지되면 -> "진짜 이동"으로 판정
+        if game.stable_count >= 5:
+            sq1, sq2 = game.candidate_move[:2], game.candidate_move[2:4]
+            
+            # 순서 조합 (e2->e4 인지 e4->e2 인지 확인)
+            move1 = chess.Move.from_uci(sq1 + sq2)
+            move2 = chess.Move.from_uci(sq2 + sq1)
+            
+            final_move = None
+            if move1 in game.board.legal_moves:
+                final_move = move1
+            elif move2 in game.board.legal_moves:
+                final_move = move2
+            
+            if final_move:
+                print(f"\n✅ [이동 확정] {final_move.uci()}") # 이게 떠야 진짜 반영된 것임
+                
+                # 내부 보드 업데이트
+                game.board.push(final_move)
+                game.prev_gray = current_gray_img # 기준 화면 업데이트 (중요!)
+                
+                # 누구 턴이었는지 확인 (방금 둔 사람)
+                moved_color = not game.board.turn 
+                
+                if moved_color == game.my_color:
+                    print(f"   -> 내 턴이므로 마우스 클릭 실행")
+                    game.execute_on_screen(final_move.uci())
+                else:
+                    print(f"   -> 상대 턴이므로 내부 상태만 동기화함")
+                
+                # 처리 후 초기화
+                game.candidate_move = None
+                game.stable_count = 0
+                time.sleep(1.0) # 수 두고 나서 1초간 휴식 (중복 입력 방지)
+            
+            else:
+                # 감지는 됐는데 규칙상 불가능한 수일 때
+                if game.stable_count == 5: # 로그 한 번만 출력
+                    print(f"❌ 규칙 위반 또는 불가능한 이동: {sq1} <-> {sq2}")
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
