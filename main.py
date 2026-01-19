@@ -134,9 +134,9 @@ class PhysicalChessBoard:
             self.prev_gray = curr_gray
             return None, curr_gray, 0
 
-        # 이전 화면과 차이 계산 (민감도: 50)
+        # 이전 화면과 차이 계산 (민감도: 30)
         diff = cv2.absdiff(self.prev_gray, curr_gray)
-        _, thresh = cv2.threshold(diff, 50, 255, cv2.THRESH_BINARY)
+        _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
 
         # 전체 변화량(노이즈) 측정
         total_diff_pixels = cv2.countNonZero(thresh)
@@ -150,10 +150,13 @@ class PhysicalChessBoard:
             for col in range(8):
                 x1, y1 = col * step, row * step
                 x2, y2 = (col + 1) * step, (row + 1) * step
-                
-                roi = thresh[y1:y2, x1:x2]
-                # 한 칸의 20% 이상 변해야 인정 (노이즈 방어 강화)
-                if cv2.countNonZero(roi) > (total_pixels * 0.20):
+
+                # [수정 후] 가장자리 15%씩 쳐내고 '알맹이(중심)'만 검사
+                margin = int(step * 0.15) 
+                roi = thresh[y1+margin : y2-margin, x1+margin : x2-margin]
+
+                # 한 칸의 10% 이상 변해야 인식
+                if cv2.countNonZero(roi) > (total_pixels * 0.10):
                     sq_name = self.get_square_from_rect(x1 + step//2, y1 + step//2)
                     square_changes.append((cv2.countNonZero(roi), sq_name))
 
