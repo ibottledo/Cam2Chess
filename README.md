@@ -4,10 +4,11 @@
 **Cam2Chess** is a webcam-based over-the-board (OTB) chess system that enables online chess play using a physical chessboard.
 
 ## Feature
+- Auto-Healing
 
 ## 수정할점
 - 카메라의 미약한 이동이나 그림자로 인한 부분의 칸만 다시 초기화(curr에 넣을 것)하는 기능
-- w/b구분 자동화
+- w/b구분 자동화(screen인식에서 fen인식 추가로 가능할듯)
 - physical board 구분 자동화 > 웹캠 진동시 다시 초기화
 
 ## Languages Used
